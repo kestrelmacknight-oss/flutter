@@ -107,6 +107,13 @@ typedef enum {
   kFlutterAccessibilityFeatureOnOffSwitchLabels = 1 << 6,
   /// Indicate the platform does not support announcements.
   kFlutterAccessibilityFeatureNoAnnounce = 1 << 7,
+  /// Indicate the platform disallows auto-playing animated images.
+  kFlutterAccessibilityFeatureNoAutoPlayAnimatedImages = 1 << 8,
+  /// Indicate the platform disallows auto-playing videos.
+  kFlutterAccessibilityFeatureNoAutoPlayVideos = 1 << 9,
+  /// Request to show deterministic (non-blinking) cursor in editable text
+  /// fields.
+  kFlutterAccessibilityFeatureDeterministicCursor = 1 << 10,
 } FlutterAccessibilityFeature;
 
 /// The set of possible actions that can be conveyed to a semantics node.
@@ -1067,6 +1074,29 @@ typedef struct {
   FlutterEngineDisplayId display_id;
   /// The view that this event is describing.
   int64_t view_id;
+  /// If `true`, the window has size constraints.
+  /// If `false`, the constraint values are ignored.
+  bool has_constraints;
+  /// Minimum physical width of the window.
+  ///
+  /// If |has_constraints| is `true`, this must be less than or equal to
+  /// |max_width_constraint| and |width|.
+  size_t min_width_constraint;
+  /// Minimum physical height of the window.
+  ///
+  /// If |has_constraints| is `true`, this must be less than or equal to
+  /// |max_height_constraint| and |height|.
+  size_t min_height_constraint;
+  /// Maximum physical width of the window.
+  ///
+  /// If |has_constraints| is `true`, this must be greater than or equal to
+  /// |min_width_constraint| and |width|.
+  size_t max_width_constraint;
+  /// Maximum physical height of the window.
+  ///
+  /// If |has_constraints| is `true`, this must be greater than or equal to
+  /// |min_height_constraint| and |height|.
+  size_t max_height_constraint;
 } FlutterWindowMetricsEvent;
 
 typedef struct {
@@ -1281,6 +1311,7 @@ typedef enum {
   kFlutterPointerDeviceKindTouch,
   kFlutterPointerDeviceKindStylus,
   kFlutterPointerDeviceKindTrackpad,
+  kFlutterPointerDeviceKindInvertedStylus,
 } FlutterPointerDeviceKind;
 
 /// Flags for the `buttons` field of `FlutterPointerEvent` when `device_kind`
@@ -1294,6 +1325,21 @@ typedef enum {
   /// If a mouse has more than five buttons, send higher bit shifted values
   /// corresponding to the button number: 1 << 5 for the 6th, etc.
 } FlutterPointerMouseButtons;
+
+/// Flags for the `buttons` field of `FlutterPointerEvent` when `device_kind`
+/// is `kFlutterPointerDeviceKindStylus` or
+/// `kFlutterPointerDeviceKindInvertedStylus`.
+typedef enum {
+  /// Whether the stylus has contact with the screen.
+  /// This matches the framework's `kStylusContact`.
+  kFlutterPointerButtonStylusContact = 1 << 0,
+  /// Whether the stylus's primary button is pressed.
+  /// This matches the framework's `kPrimaryStylusButton`.
+  kFlutterPointerButtonStylusPrimary = 1 << 1,
+  /// Whether the stylus's secondary button is pressed.
+  /// This matches the framework's `kSecondaryStylusButton`.
+  kFlutterPointerButtonStylusSecondary = 1 << 2,
+} FlutterPointerStylusButtons;
 
 /// The type of a pointer signal.
 typedef enum {
@@ -1330,6 +1376,7 @@ typedef struct {
   /// correct buttons.
   FlutterPointerDeviceKind device_kind;
   /// The buttons currently pressed, if any.
+  /// See `FlutterPointerMouseButtons` or `FlutterPointerStylusButtons`.
   int64_t buttons;
   /// The x offset of the pan/zoom in physical pixels.
   double pan_x;
@@ -1341,6 +1388,14 @@ typedef struct {
   double rotation;
   /// The identifier of the view that received the pointer event.
   FlutterViewId view_id;
+  /// The pressure of the current pointer, where 0.0 is the default value.
+  double pressure;
+  /// The minimum bound of the pressure of the current pointer, where 0.0 is the
+  /// default minimum bound.
+  double pressure_min;
+  /// The maximum bound of the pressure of the current pointer, where 0.0 is the
+  /// default maximum bound.
+  double pressure_max;
 } FlutterPointerEvent;
 
 typedef enum {
@@ -2763,6 +2818,10 @@ typedef struct {
   /// `PlatformDispatcher.instance.engineId`. Can be used in native code to
   /// retrieve the engine instance that is running the Dart code.
   int64_t engine_id;
+
+  /// If true, the engine will decode images in wide gamut color spaces
+  /// (Display P3) when supported. If false, images are decoded to sRGB.
+  bool enable_wide_gamut;
 } FlutterProjectArgs;
 
 typedef struct {

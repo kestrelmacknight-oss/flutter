@@ -4,7 +4,9 @@
 
 #include "flutter/shell/platform/windows/host_window.h"
 #include "flutter/shell/platform/windows/host_window_dialog.h"
+#include "flutter/shell/platform/windows/host_window_popup.h"
 #include "flutter/shell/platform/windows/host_window_regular.h"
+#include "flutter/shell/platform/windows/host_window_tooltip.h"
 
 #include <dwmapi.h>
 
@@ -28,35 +30,6 @@ flutter::Size ClampToVirtualScreen(flutter::Size size) {
 
   return flutter::Size(std::clamp(size.width(), 0.0, virtual_screen_width),
                        std::clamp(size.height(), 0.0, virtual_screen_height));
-}
-
-void EnableTransparentWindowBackground(HWND hwnd,
-                                       flutter::WindowsProcTable const& win32) {
-  enum ACCENT_STATE { ACCENT_DISABLED = 0 };
-
-  struct ACCENT_POLICY {
-    ACCENT_STATE AccentState;
-    DWORD AccentFlags;
-    DWORD GradientColor;
-    DWORD AnimationId;
-  };
-
-  // Set the accent policy to disable window composition.
-  ACCENT_POLICY accent = {ACCENT_DISABLED, 2, static_cast<DWORD>(0), 0};
-  flutter::WindowsProcTable::WINDOWCOMPOSITIONATTRIBDATA data = {
-      .Attrib =
-          flutter::WindowsProcTable::WINDOWCOMPOSITIONATTRIB::WCA_ACCENT_POLICY,
-      .pvData = &accent,
-      .cbData = sizeof(accent)};
-  win32.SetWindowCompositionAttribute(hwnd, &data);
-
-  // Extend the frame into the client area and set the window's system
-  // backdrop type for visual effects.
-  MARGINS const margins = {-1};
-  win32.DwmExtendFrameIntoClientArea(hwnd, &margins);
-  INT effect_value = 1;
-  win32.DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, &effect_value,
-                              sizeof(BOOL));
 }
 
 // Retrieves the calling thread's last-error code message as a string,
@@ -206,10 +179,13 @@ std::unique_ptr<HostWindow> HostWindow::CreateRegularWindow(
     FlutterWindowsEngine* engine,
     const WindowSizeRequest& preferred_size,
     const WindowConstraints& preferred_constraints,
-    LPCWSTR title) {
-  return std::unique_ptr<HostWindow>(new HostWindowRegular(
-      window_manager, engine, preferred_size,
-      FromWindowConstraints(preferred_constraints), title));
+    LPCWSTR title,
+    bool sized_to_content,
+    bool resizable) {
+  return std::unique_ptr<HostWindow>(
+      new HostWindowRegular(window_manager, engine, preferred_size,
+                            FromWindowConstraints(preferred_constraints), title,
+                            sized_to_content, resizable));
 }
 
 std::unique_ptr<HostWindow> HostWindow::CreateDialogWindow(
@@ -218,42 +194,60 @@ std::unique_ptr<HostWindow> HostWindow::CreateDialogWindow(
     const WindowSizeRequest& preferred_size,
     const WindowConstraints& preferred_constraints,
     LPCWSTR title,
+    HWND parent,
+    bool sized_to_content,
+    bool resizable) {
+  return std::unique_ptr<HostWindow>(new HostWindowDialog(
+      window_manager, engine, preferred_size,
+      FromWindowConstraints(preferred_constraints), title,
+      parent ? parent : std::optional<HWND>(), sized_to_content, resizable));
+}
+
+std::unique_ptr<HostWindow> HostWindow::CreateTooltipWindow(
+    WindowManager* window_manager,
+    FlutterWindowsEngine* engine,
+    const WindowConstraints& preferred_constraints,
+    GetWindowPositionCallback get_position_callback,
     HWND parent) {
-  return std::unique_ptr<HostWindow>(
-      new HostWindowDialog(window_manager, engine, preferred_size,
-                           FromWindowConstraints(preferred_constraints), title,
-                           parent ? parent : std::optional<HWND>()));
+  return std::unique_ptr<HostWindowTooltip>(new HostWindowTooltip(
+      window_manager, engine, FromWindowConstraints(preferred_constraints),
+      get_position_callback, parent));
+}
+
+std::unique_ptr<HostWindow> HostWindow::CreatePopupWindow(
+    WindowManager* window_manager,
+    FlutterWindowsEngine* engine,
+    const WindowConstraints& preferred_constraints,
+    GetWindowPositionCallback get_position_callback,
+    HWND parent) {
+  return std::unique_ptr<HostWindowPopup>(new HostWindowPopup(
+      window_manager, engine, FromWindowConstraints(preferred_constraints),
+      get_position_callback, parent));
 }
 
 HostWindow::HostWindow(WindowManager* window_manager,
-                       FlutterWindowsEngine* engine,
-                       WindowArchetype archetype,
-                       DWORD window_style,
-                       DWORD extended_window_style,
-                       const BoxConstraints& box_constraints,
-                       Rect const initial_window_rect,
-                       LPCWSTR title,
-                       std::optional<HWND> const& owner_window)
-    : window_manager_(window_manager),
-      engine_(engine),
-      archetype_(archetype),
-      box_constraints_(box_constraints) {
+                       FlutterWindowsEngine* engine)
+    : window_manager_(window_manager), engine_(engine) {}
+
+void HostWindow::InitializeFlutterView(
+    HostWindowInitializationParams const& params) {
   // Set up the view.
   auto view_window = std::make_unique<FlutterWindow>(
-      initial_window_rect.width(), initial_window_rect.height(),
-      engine->display_manager(), engine->windows_proc_table());
+      params.initial_window_rect.width(), params.initial_window_rect.height(),
+      engine_->display_manager(), engine_->windows_proc_table());
 
   std::unique_ptr<FlutterWindowsView> view =
-      engine->CreateView(std::move(view_window));
+      engine_->CreateView(std::move(view_window), params.is_sized_to_content,
+                          params.box_constraints, params.sizing_delegate);
   FML_CHECK(view != nullptr);
 
   view_controller_ =
       std::make_unique<FlutterWindowsViewController>(nullptr, std::move(view));
-  FML_CHECK(engine->running());
+  FML_CHECK(engine_->running());
   // The Windows embedder listens to accessibility updates using the
   // view's HWND. The embedder's accessibility features may be stale if
   // the app was in headless mode.
-  engine->UpdateAccessibilityFeatures();
+  engine_->UpdateAccessibilityFeatures();
 
   // Register the window class.
   if (!IsClassRegistered(kWindowClassName)) {
@@ -276,11 +270,12 @@ HostWindow::HostWindow(WindowManager* window_manager,
 
   // Create the native window.
   window_handle_ = CreateWindowEx(
-      extended_window_style, kWindowClassName, title, window_style,
-      initial_window_rect.left(), initial_window_rect.top(),
-      initial_window_rect.width(), initial_window_rect.height(),
-      owner_window ? *owner_window : nullptr, nullptr, GetModuleHandle(nullptr),
-      engine->windows_proc_table().get());
+      params.extended_window_style, kWindowClassName, params.title,
+      params.window_style, params.initial_window_rect.left(),
+      params.initial_window_rect.top(), params.initial_window_rect.width(),
+      params.initial_window_rect.height(),
+      params.owner_window ? *params.owner_window : nullptr, nullptr,
+      GetModuleHandle(nullptr), engine_->windows_proc_table().get());
   FML_CHECK(window_handle_ != nullptr);
 
   // Adjust the window position so its origin aligns with the top-left corner
@@ -303,12 +298,16 @@ HostWindow::HostWindow(WindowManager* window_manager,
 
   SetChildContent(view_controller_->view()->GetWindowHandle(), window_handle_);
 
-  // TODO(loicsharma): Hide the window until the first frame is rendered.
-  // Single window apps use the engine's next frame callback to show the
-  // window. This doesn't work for multi window apps as the engine cannot have
-  // multiple next frame callbacks. If multiple windows are created, only the
-  // last one will be shown.
-  ShowWindow(window_handle_, SW_SHOWNORMAL);
+  // Defer showing the window until the first frame is rendered so the user
+  // doesn't see a blank window. Each view has its own first-frame callback,
+  // so this works correctly for multi-window apps.
+  view_controller_->view()->SetFirstFrameCallback(
+      [hwnd = window_handle_, cmd_show = params.nCmdShow]() {
+        if (::IsWindow(hwnd)) {
+          ShowWindow(hwnd, cmd_show);
+        }
+      });
+  archetype_ = params.archetype;
   SetWindowLongPtr(window_handle_, GWLP_USERDATA,
                    reinterpret_cast<LONG_PTR>(this));
 }
@@ -343,12 +342,40 @@ HWND HostWindow::GetWindowHandle() const {
   return window_handle_;
 }
 
+HWND HostWindow::GetFlutterViewWindowHandle() const {
+  return view_controller_->view()->GetWindowHandle();
+}
+
 void HostWindow::FocusRootViewOf(HostWindow* window) {
   auto child_content = window->view_controller_->view()->GetWindowHandle();
   if (window != nullptr && child_content != nullptr) {
     SetFocus(child_content);
   }
 };
+
+void HostWindow::HandleWindowActivation(HWND hwnd, WPARAM wparam) {
+  if (LOWORD(wparam) == WA_INACTIVE) {
+    // The window is being deactivated; leave focus untouched. Focusing this
+    // window's view would call SetFocus on its content, which reactivates the
+    // window (SetFocus activates the parent of the focused window) and pulls it
+    // back to the top of the z-order, taking activation from the window that is
+    // being activated.
+    return;
+  }
+
+  if (!IsWindowEnabled(hwnd)) {
+    // Prevent a disabled window (e.g. the owner of a modal dialog) from being
+    // activated using the task switcher by redirecting focus and activation to
+    // the first enabled descendant.
+    if (HostWindow* const enabled_descendant = FindFirstEnabledDescendant()) {
+      SetActiveWindow(enabled_descendant->GetWindowHandle());
+      FocusRootViewOf(this);
+    }
+    return;
+  }
+
+  FocusRootViewOf(this);
+}
 
 LRESULT HostWindow::WndProc(HWND hwnd,
                             UINT message,
@@ -359,7 +386,6 @@ LRESULT HostWindow::WndProc(HWND hwnd,
     auto* const windows_proc_table =
         static_cast<WindowsProcTable*>(create_struct->lpCreateParams);
     windows_proc_table->EnableNonClientDpiScaling(hwnd);
-    EnableTransparentWindowBackground(hwnd, *windows_proc_table);
   } else if (HostWindow* const window = GetThisFromHandle(hwnd)) {
     return window->HandleMessage(hwnd, message, wparam, lparam);
   }
@@ -458,7 +484,7 @@ LRESULT HostWindow::HandleMessage(HWND hwnd,
     }
 
     case WM_ACTIVATE:
-      FocusRootViewOf(this);
+      HandleWindowActivation(hwnd, wparam);
       return 0;
 
     case WM_DWMCOLORIZATIONCOLORCHANGED:
@@ -832,6 +858,7 @@ void HostWindow::DisableRecursively() {
 
 void HostWindow::UpdateModalStateLayer() {
   auto children = GetOwnedWindows();
+
   if (children.empty()) {
     // Leaf window in the active path, enable it.
     EnableWindow(window_handle_, true);

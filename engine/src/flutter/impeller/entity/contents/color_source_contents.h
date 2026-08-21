@@ -51,14 +51,9 @@ class ColorSourceContents : public Contents {
   ~ColorSourceContents() override;
 
   //----------------------------------------------------------------------------
-  /// @brief  Set the geometry that this contents will use to render.
-  ///
-  void SetGeometry(const Geometry* geometry);
-
-  //----------------------------------------------------------------------------
   /// @brief  Get the geometry that this contents will use to render.
   ///
-  const Geometry* GetGeometry() const;
+  virtual const Geometry* GetGeometry() const = 0;
 
   //----------------------------------------------------------------------------
   /// @brief  Set the effect transform for this color source.
@@ -73,7 +68,7 @@ class ColorSourceContents : public Contents {
   void SetEffectTransform(Matrix matrix);
 
   //----------------------------------------------------------------------------
-  /// @brief   Set the inverted effect transform for this color source.
+  /// @brief   Get the inverted effect transform for this color source.
   ///
   ///          When the effect transform is set via `SetEffectTransform`, the
   ///          value is inverted upon storage. The reason for this is that most
@@ -278,7 +273,6 @@ class ColorSourceContents : public Contents {
   }
 
  private:
-  const Geometry* geometry_ = nullptr;
   Matrix inverse_matrix_;
   Scalar opacity_ = 1.0;
   Scalar inherited_opacity_ = 1.0;

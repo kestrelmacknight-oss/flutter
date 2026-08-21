@@ -42,6 +42,7 @@ void main() {
           r8DexingBugInAgp73Handler,
           minSdkVersionHandler,
           transformInputIssueHandler,
+          javaHeapSpaceHandler,
           lockFileDepMissingHandler,
           minCompileSdkVersionHandler,
           incompatibleJavaAndAgpVersionsHandler,
@@ -816,6 +817,39 @@ assembleProfile
     );
   });
 
+  group('java heap space', () {
+    testWithoutContext('pattern', () {
+      expect(javaHeapSpaceHandler.test('> Java heap space'), isTrue);
+      expect(javaHeapSpaceHandler.test('java.lang.OutOfMemoryError: Java heap space'), isTrue);
+    });
+
+    testUsingContext(
+      'suggestion',
+      () async {
+        final GradleBuildStatus status = await javaHeapSpaceHandler.handler(
+          project: FlutterProject.fromDirectoryTest(fileSystem.currentDirectory),
+          usesAndroidX: true,
+          line: '> Java heap space',
+        );
+
+        expect(status, GradleBuildStatus.exit);
+        expect(testLogger.statusText, contains('Java heap space'));
+        expect(
+          testLogger.statusText,
+          contains(
+            'https://docs.gradle.org/current/userguide/config_gradle.html#sec:configuring_jvm_memory',
+          ),
+        );
+      },
+      overrides: <Type, Generator>{
+        GradleUtils: () => FakeGradleUtils(),
+        Platform: () => fakePlatform('android'),
+        FileSystem: () => fileSystem,
+        ProcessManager: () => processManager,
+      },
+    );
+  });
+
   group('Dependency mismatch', () {
     testWithoutContext('pattern', () {
       expect(
@@ -1002,10 +1036,10 @@ A problem occurred evaluating project ':app'.
             '│ To fix this issue, replace the following content:                                │\n'
             '│ /android/build.gradle:                                                           │\n'
             "│     - classpath 'com.android.tools.build:gradle:<current-version>'               │\n"
-            "│     + classpath 'com.android.tools.build:gradle:$templateAndroidGradlePluginVersion'                          │\n"
+            "│     + classpath 'com.android.tools.build:gradle:$templateAndroidGradlePluginVersion'                           │\n"
             '│ /android/gradle/wrapper/gradle-wrapper.properties:                               │\n'
             '│     - https://services.gradle.org/distributions/gradle-<current-version>-all.zip │\n'
-            '│     + https://services.gradle.org/distributions/gradle-$templateDefaultGradleVersion-all.zip              │\n'
+            '│     + https://services.gradle.org/distributions/gradle-$templateDefaultGradleVersion-all.zip             │\n'
             '└──────────────────────────────────────────────────────────────────────────────────┘\n',
           ),
         );
@@ -1654,8 +1688,13 @@ An exception occurred applying plugin request [id: 'kotlin-android']
         testLogger.statusText,
         contains('Starting AGP 9+, the default has become built-in Kotlin.'),
       );
-      expect(testLogger.statusText, contains('This results in a build failure'));
-      expect(testLogger.statusText, contains('when applying the kotlin-android plugin'));
+      expect(
+        testLogger.statusText,
+        contains(' This results in a build failure when applying the kotlin-android plugin'),
+      );
+      expect(testLogger.statusText, contains('applying the kotlin-android plugin'));
+      expect(testLogger.statusText, contains('For instructions on how to migrate, see:'));
+      expect(testLogger.statusText, contains(kMigrateToBuiltInKotlinDocsUrl));
     },
     overrides: <Type, Generator>{
       GradleUtils: () => FakeGradleUtils(),
@@ -1691,10 +1730,16 @@ An exception occurred applying plugin request [id: 'dev.flutter.flutter-gradle-p
         testLogger.statusText,
         contains('Starting AGP 9+, only the new DSL interface will be read.'),
       );
-      expect(testLogger.statusText, contains('This results in a build failure'));
-      expect(testLogger.statusText, contains('when applying the Flutter Gradle plugin'));
-      expect(testLogger.statusText, contains('If you are not upgrading to AGP 9+'));
-      expect(testLogger.statusText, contains('run `flutter analyze --suggestions`'));
+      expect(
+        testLogger.statusText,
+        contains('This results in a build failure when applying the Flutter Gradle plugin'),
+      );
+      expect(testLogger.statusText, contains('For instructions on how to opt out, see:'));
+      expect(testLogger.statusText, contains(kOptOutOfNewDslDocsUrl));
+      expect(
+        testLogger.statusText,
+        contains('If you are not upgrading to AGP 9+, run `flutter analyze --suggestions`'),
+      );
     },
     overrides: <Type, Generator>{
       GradleUtils: () => FakeGradleUtils(),

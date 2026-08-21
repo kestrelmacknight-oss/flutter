@@ -91,7 +91,7 @@ class FakeDartDevelopmentService extends Fake implements DartDevelopmentService 
   bool wasShutdown = false;
 
   @override
-  void shutdown() {
+  Future<void> shutdown() async {
     wasShutdown = true;
   }
 }
@@ -138,7 +138,7 @@ class FakeFlutterDevice extends Fake implements FlutterDevice {
   Future<void> handleHotRestart() async {}
 
   @override
-  TargetPlatform? get targetPlatform => device._targetPlatform;
+  TargetPlatform get targetPlatform => device._targetPlatform;
 }
 
 class TestFlutterDevice extends FlutterDevice {
@@ -148,6 +148,7 @@ class TestFlutterDevice extends FlutterDevice {
     required ResidentCompiler generator,
   }) : super(
          device,
+         targetPlatform: TargetPlatform.unsupported,
          buildInfo: BuildInfo.debug,
          generator: generator,
          developmentShaderCompiler: const FakeShaderCompiler(),
@@ -246,4 +247,7 @@ class FakeShaderCompiler implements DevelopmentShaderCompiler {
   Future<DevFSContent> recompileShader(DevFSContent inputShader) {
     throw UnimplementedError();
   }
+
+  @override
+  bool areDependenciesModified(DevFSContent shaderContent) => false;
 }

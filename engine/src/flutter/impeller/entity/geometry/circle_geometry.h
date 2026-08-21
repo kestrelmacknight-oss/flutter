@@ -22,7 +22,7 @@ class CircleGeometry final : public Geometry {
   ~CircleGeometry() override;
 
   // |Geometry|
-  bool CoversArea(const Matrix& transform, const Rect& rect) const override;
+  bool CoversArea(const Matrix& transform, const IRect& rect) const override;
 
   // |Geometry|
   bool IsAxisAlignedRect() const override;
@@ -45,6 +45,8 @@ class CircleGeometry final : public Geometry {
   // Set the number of pixels to add to the edge(s) of the circle for
   // SDF-based antialiasing
   void SetAntialiasPadding(Scalar extra_pixels);
+
+  Scalar GetAntialiasPadding() const;
 
  private:
   Point center_;

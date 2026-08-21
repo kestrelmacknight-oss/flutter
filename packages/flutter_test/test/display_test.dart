@@ -4,7 +4,6 @@
 
 import 'dart:ui';
 
-import 'package:flutter/material.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -119,6 +118,7 @@ void main() {
     });
 
     testWidgets('can reset all values', (WidgetTester tester) async {
+      addTearDown(tester.binding.resetLayers);
       final initial = DisplaySnapshot(tester.view.display);
 
       tester.view.display.devicePixelRatio = 7;

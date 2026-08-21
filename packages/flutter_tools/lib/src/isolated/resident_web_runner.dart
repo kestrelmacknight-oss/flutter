@@ -26,13 +26,13 @@ import '../base/utils.dart';
 import '../build_info.dart';
 import '../cache.dart';
 import '../dart/language_version.dart';
+import '../dart/package_map.dart';
 import '../devfs.dart';
 import '../device.dart';
 import '../flutter_plugins.dart';
 import '../globals.dart' as globals;
 import '../hook_runner.dart' show hookRunner;
 import '../project.dart';
-import '../reporting/reporting.dart';
 import '../resident_runner.dart';
 import '../run_hot.dart';
 import '../vmservice.dart';
@@ -55,6 +55,7 @@ class DwdsWebRunnerFactory extends WebRunnerFactory {
     required bool stayResident,
     required FlutterProject flutterProject,
     required DebuggingOptions debuggingOptions,
+    Map<String, Object?> platformArgs = const <String, Object?>{},
     UrlTunneller? urlTunneller,
     required Logger logger,
     required Terminal terminal,
@@ -71,6 +72,7 @@ class DwdsWebRunnerFactory extends WebRunnerFactory {
       target: target,
       flutterProject: flutterProject,
       debuggingOptions: debuggingOptions,
+      platformArgs: platformArgs,
       stayResident: stayResident,
       urlTunneller: urlTunneller,
       machine: machine,
@@ -97,11 +99,12 @@ class ResidentWebRunner extends ResidentRunner {
   ResidentWebRunner(
     FlutterDevice device, {
     String? target,
-    bool stayResident = true,
-    bool machine = false,
-    String? projectRootPath,
+    super.stayResident = true,
+    super.machine = false,
+    super.projectRootPath,
     required this.flutterProject,
-    required DebuggingOptions debuggingOptions,
+    required super.debuggingOptions,
+    this.platformArgs = const <String, Object?>{},
     required FileSystem fileSystem,
     required Logger logger,
     required Terminal terminal,
@@ -121,9 +124,6 @@ class ResidentWebRunner extends ResidentRunner {
        super(
          <FlutterDevice>[device],
          target: target ?? fileSystem.path.join('lib', 'main.dart'),
-         debuggingOptions: debuggingOptions,
-         stayResident: stayResident,
-         machine: machine,
          commandHelp: CommandHelp(
            logger: logger,
            terminal: terminal,
@@ -131,7 +131,6 @@ class ResidentWebRunner extends ResidentRunner {
            outputPreferences: outputPreferences,
          ),
          dartBuilder: hookRunner,
-         projectRootPath: projectRootPath,
        );
 
   final FileSystem _fileSystem;
@@ -141,6 +140,7 @@ class ResidentWebRunner extends ResidentRunner {
   final Analytics _analytics;
   final UrlTunneller? _urlTunneller;
   final Map<String, String> _webDefines;
+  final Map<String, Object?> platformArgs;
 
   @override
   Logger get logger => _logger;
@@ -293,6 +293,8 @@ class ResidentWebRunner extends ResidentRunner {
             ? WebExpressionCompiler(flutterDevice!.generator!, fileSystem: _fileSystem)
             : null;
 
+        flutterDevice!.developmentShaderCompiler.configureCompiler(TargetPlatform.web_javascript);
+
         flutterDevice!.devFS = WebDevFS(
           webDevServerConfig: updatedConfig,
           packagesFilePath: packagesFilePath,
@@ -368,7 +370,7 @@ class ResidentWebRunner extends ResidentRunner {
           package,
           mainPath: target,
           debuggingOptions: debuggingOptions,
-          platformArgs: <String, Object>{'uri': url.toString()},
+          platformArgs: <String, Object?>{...platformArgs, 'uri': url.toString()},
         );
         return attach(
           connectionInfoCompleter: connectionInfoCompleter,
@@ -396,6 +398,13 @@ class ResidentWebRunner extends ResidentRunner {
       appFailedToStart();
       _logger.printError(error.toString(), stackTrace: stackTrace);
       throwToolExit(kExitMessage);
+    } on TimeoutException catch (error, stackTrace) {
+      appFailedToStart();
+      _logger.printError(
+        'Failed to establish connection with the web debug service: $error',
+        stackTrace: stackTrace,
+      );
+      throwToolExit('Failed to connect to the web debug service.');
     } on DartDevelopmentServiceException catch (error) {
       // The application may have started shutting down before DDS was able to finish establishing
       // its connection to DWDS. Don't treat this as an unhandled exception.
@@ -453,7 +462,7 @@ class ResidentWebRunner extends ResidentRunner {
       status = _logger.startProgress('Performing hot reload...', progressId: 'hot.reload');
     }
 
-    final String targetPlatform = getNameForTargetPlatform(TargetPlatform.web_javascript);
+    final String targetPlatform = TargetPlatform.web_javascript.getName();
     final String sdkName = await flutterDevice!.device!.sdkNameAndVersion;
 
     // Will be null if there is no report.
@@ -471,13 +480,6 @@ class ResidentWebRunner extends ResidentRunner {
         if (report.hotReloadRejected) {
           // We cannot capture the reason why the reload was rejected as it may
           // contain user information.
-          HotEvent(
-            'reload-reject',
-            targetPlatform: targetPlatform,
-            sdkName: sdkName,
-            emulator: false,
-            fullRestart: fullRestart,
-          ).send();
           _analytics.send(
             Event.hotRunnerInfo(
               label: 'reload-reject',
@@ -513,7 +515,7 @@ class ResidentWebRunner extends ResidentRunner {
       }
     }
 
-    if (_connectionResult == null) {
+    if (supportsServiceProtocol && _connectionResult == null) {
       return _handleNoClientsAvailable(status);
     }
 
@@ -590,6 +592,7 @@ class ResidentWebRunner extends ResidentRunner {
             }
             return OperationResult(1, reloadFailedMessage);
           }
+          await evictDirtyAssets();
           String? failedReassemble;
           final DateTime reassembleStart = _systemClock.now();
           await _vmService
@@ -639,21 +642,6 @@ class ResidentWebRunner extends ResidentRunner {
             elapsedMilliseconds: elapsed.inMilliseconds,
           ),
         );
-        HotEvent(
-          'restart',
-          targetPlatform: targetPlatform,
-          sdkName: sdkName,
-          emulator: false,
-          fullRestart: true,
-          reason: reason,
-          overallTimeInMs: elapsed.inMilliseconds,
-          syncedBytes: report?.syncedBytes,
-          invalidatedSourcesCount: report?.invalidatedSourcesCount,
-          transferTimeInMs: report?.transferDuration.inMilliseconds,
-          compileTimeInMs: report?.compileDuration.inMilliseconds,
-          findInvalidatedTimeInMs: report?.findInvalidatedDuration.inMilliseconds,
-          scannedSourcesCount: report?.scannedSourcesCount,
-        ).send();
         _analytics.send(
           Event.hotRunnerInfo(
             label: 'restart',
@@ -679,23 +667,6 @@ class ResidentWebRunner extends ResidentRunner {
             elapsedMilliseconds: elapsed.inMilliseconds,
           ),
         );
-        HotEvent(
-          'reload',
-          targetPlatform: targetPlatform,
-          sdkName: sdkName,
-          emulator: false,
-          fullRestart: false,
-          reason: reason,
-          overallTimeInMs: elapsed.inMilliseconds,
-          syncedBytes: report?.syncedBytes,
-          invalidatedSourcesCount: report?.invalidatedSourcesCount,
-          transferTimeInMs: report?.transferDuration.inMilliseconds,
-          compileTimeInMs: report?.compileDuration.inMilliseconds,
-          findInvalidatedTimeInMs: report?.findInvalidatedDuration.inMilliseconds,
-          scannedSourcesCount: report?.scannedSourcesCount,
-          reassembleTimeInMs: reassembleDuration?.inMilliseconds,
-          reloadVMTimeInMs: reloadDuration?.inMilliseconds,
-        ).send();
         _analytics.send(
           Event.hotRunnerInfo(
             label: 'reload',
@@ -740,14 +711,18 @@ class ResidentWebRunner extends ResidentRunner {
       // the web_plugin_registrant.dart file alongside the generated main.dart
       const generatedImport = 'web_plugin_registrant.dart';
 
-      Uri? importedEntrypoint = packageConfig!.toPackageUri(mainUri);
+      Uri? importedEntrypoint = packageConfig!.toPackageUriForWorkspace(mainUri);
       // Special handling for entrypoints that are not under lib, such as test scripts.
       if (importedEntrypoint == null) {
         final String parent = _fileSystem.file(mainUri).parent.path;
         flutterDevices.first.generator!
           ..addFileSystemRoot(parent)
           ..addFileSystemRoot(_fileSystem.directory('test').absolute.path);
-        importedEntrypoint = Uri(scheme: 'org-dartlang-app', path: '/${mainUri.pathSegments.last}');
+        importedEntrypoint = Uri(
+          scheme: 'org-dartlang-app',
+          host: '',
+          path: '/${mainUri.pathSegments.last}',
+        );
       }
       final LanguageVersion languageVersion = determineLanguageVersion(
         _fileSystem.file(mainUri),
@@ -947,14 +922,13 @@ class ResidentWebRunner extends ResidentRunner {
           // TODO(bkonyi): consider removing this log message and using only the standard VM
           // service message instead.
           _logger.printStatus('Debug service listening on $websocketUri');
-          printDebuggerList();
-          connectionInfoCompleter?.complete(
-            DebugConnectionInfo(
-              wsUri: websocketUri,
-              devToolsUri: debugConnection.devToolsUri?.toUri(),
-              dtdUri: debugConnection.dtdUri?.toUri(),
-            ),
+          final connectionInfo = DebugConnectionInfo(
+            wsUri: websocketUri,
+            devToolsUri: debugConnection.devToolsUri?.toUri(),
+            dtdUri: debugConnection.dtdUri?.toUri(),
           );
+          printDebuggerList(connectionInfo: connectionInfo);
+          connectionInfoCompleter?.complete(connectionInfo);
         }),
       );
     } else {

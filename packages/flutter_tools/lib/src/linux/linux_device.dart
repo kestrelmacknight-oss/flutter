@@ -20,21 +20,13 @@ import 'linux_workflow.dart';
 /// A device that represents a desktop Linux target.
 class LinuxDevice extends DesktopDevice {
   LinuxDevice({
-    required ProcessManager processManager,
-    required Logger logger,
-    required FileSystem fileSystem,
-    required OperatingSystemUtils operatingSystemUtils,
+    required super.processManager,
+    required super.logger,
+    required super.fileSystem,
+    required super.operatingSystemUtils,
   }) : _operatingSystemUtils = operatingSystemUtils,
        _logger = logger,
-       super(
-         'linux',
-         platformType: PlatformType.linux,
-         ephemeral: false,
-         logger: logger,
-         processManager: processManager,
-         fileSystem: fileSystem,
-         operatingSystemUtils: operatingSystemUtils,
-       );
+       super('linux', platformType: PlatformType.linux, ephemeral: false);
 
   final OperatingSystemUtils _operatingSystemUtils;
   final Logger _logger;
@@ -43,12 +35,17 @@ class LinuxDevice extends DesktopDevice {
   Future<bool> isSupported() async => true;
 
   @override
+  bool get supportsFlavors => true;
+
+  @override
   String get name => 'Linux';
 
   @override
   late final Future<TargetPlatform> targetPlatform = () async {
     if (_operatingSystemUtils.hostPlatform == HostPlatform.linux_x64) {
       return TargetPlatform.linux_x64;
+    } else if (_operatingSystemUtils.hostPlatform == HostPlatform.linux_riscv64) {
+      return TargetPlatform.linux_riscv64;
     }
     return TargetPlatform.linux_arm64;
   }();
@@ -75,7 +72,7 @@ class LinuxDevice extends DesktopDevice {
 
   @override
   String executablePathForDevice(covariant LinuxApp package, BuildInfo buildInfo) {
-    return package.executable(buildInfo.mode);
+    return package.executable(buildInfo.mode, buildInfo.flavor);
   }
 }
 
